@@ -1,7 +1,32 @@
 / {
-	aliases {
-		led-blue = &blue_led_1;
-		led-green = &green_led_2;
-		led-red = &red_led_3;
-	};
+    aliases {
+        sw-b2 = &button_2;
+        led-r = &rgb_red;
+        led-g = &rgb_green;
+        led-b = &rgb_blue;
+    };
+
+    leds {
+        compatible = "gpio-leds";
+        rgb_red: rgb_red {
+            gpios = <&gpiob 9 GPIO_ACTIVE_LOW>;
+            label = "RGB LED Red";
+        };
+        rgb_green: rgb_green {
+            gpios = <&gpiob 15 GPIO_ACTIVE_LOW>;
+            label = "RGB LED Green";
+        };
+        rgb_blue: rgb_blue {
+            gpios = <&gpiob 13 GPIO_ACTIVE_LOW>;
+            label = "RGB LED Blue";
+        };
+    };
+
+    gpio_keys {
+        compatible = "gpio-keys";
+        button_2: button_2 {
+            label = "User Button B2";
+            gpios = <&gpioa 1 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+        };
+    };
 };
