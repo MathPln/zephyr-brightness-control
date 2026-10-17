@@ -4,6 +4,7 @@
         led-r = &rgb_red;
         led-g = &rgb_green;
         led-b = &rgb_blue;
+        adc-sensor = &adc_sensor;
     };
 
     leds {
@@ -28,5 +29,26 @@
             label = "User Button B2";
             gpios = <&gpioa 1 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
         };
+    };
+
+    adc_sensor: adc_sensor {
+        compatible = "voltage-divider";
+        io-channels = <&adc1 5>;
+        output-ohms = <0>;
+        full-ohms = <1>;
+    };
+};
+
+&adc1 {
+    status = "okay";
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel@5 {
+        reg = <5>;
+        zephyr,gain = "ADC_GAIN_1";
+        zephyr,reference = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+        zephyr,resolution = <12>;
     };
 };
