@@ -11,10 +11,20 @@ static const struct gpio_dt_spec led_r = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led_r), gp
 static const struct gpio_dt_spec led_g = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led_g), gpios, {0});
 static const struct gpio_dt_spec led_b = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led_b), gpios, {0});
 
+/* Button callback data and semaphore */
+static struct gpio_callback button_cb_data;
+K_SEM_DEFINE(button_sem, 0, 1);
+
+/* Interrupt Service Routine for Button B2 */
+void button_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+{
+    k_sem_give(&button_sem);
+}
+
+static int color_state = 0;
+
 void main(void)
 {
-    printk("=== Step: Add RGB LED controller ===\n");
-
     /* Check and configure the button */
     if (!gpio_is_ready_dt(&button)) {
         printk("Error: button device is not ready\n");
@@ -22,25 +32,28 @@ void main(void)
     }
     gpio_pin_configure_dt(&button, GPIO_INPUT);
 
+    /* Configure button interrupt */
+    gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_TO_ACTIVE);
+    gpio_init_callback(&button_cb_data, button_isr, BIT(button.pin));
+    gpio_add_callback(button.port, &button_cb_data);
+
     /* Check and configure the RGB LEDs */
     if (gpio_is_ready_dt(&led_r)) gpio_pin_configure_dt(&led_r, GPIO_OUTPUT_INACTIVE);
     if (gpio_is_ready_dt(&led_g)) gpio_pin_configure_dt(&led_g, GPIO_OUTPUT_INACTIVE);
     if (gpio_is_ready_dt(&led_b)) gpio_pin_configure_dt(&led_b, GPIO_OUTPUT_INACTIVE);
 
-    int color_state = 0;
-
     while (1) {
-        int val = gpio_pin_get_dt(&button);
-
-        /* If button B2 is pressed, change the LED color */
-        if (val > 0) {
-            color_state = (color_state + 1) % 4;
+        /* Wait for button press via semaphore instead of polling */
+        if (k_sem_take(&button_sem, K_FOREVER) == 0) {
             
+            color_state = (color_state + 1) % 4;
+
             /* Turn off all LEDs first */
             gpio_pin_set_dt(&led_r, 0);
             gpio_pin_set_dt(&led_g, 0);
             gpio_pin_set_dt(&led_b, 0);
 
+            /* Switch colors based on state */
             switch (color_state) {
                 case 1:
                     gpio_pin_set_dt(&led_r, 1);
@@ -58,10 +71,6 @@ void main(void)
                     printk("RGB LED -> OFF\n");
                     break;
             }
-            /* Simple debounce delay to prevent multiple triggers on a single click */
-            k_msleep(300);
         }
-
-        k_msleep(100);
     }
 }
