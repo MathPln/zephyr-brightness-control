@@ -14,6 +14,15 @@ static const struct gpio_dt_spec led_b = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led_b), gp
 /* Button callback data and semaphore */
 static struct gpio_callback button_cb_data;
 K_SEM_DEFINE(button_sem, 0, 1);
+static int color_state = 0;
+
+/* Helper: Set RGB color */
+static void set_color(int r, int g, int b)
+{
+    gpio_pin_set_dt(&led_r, r);
+    gpio_pin_set_dt(&led_g, g);
+    gpio_pin_set_dt(&led_b, b);
+}
 
 /* Interrupt Service Routine for Button B2 */
 void button_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
@@ -21,9 +30,7 @@ void button_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pin
     k_sem_give(&button_sem);
 }
 
-static int color_state = 0;
-
-void main(void)
+void system_init(void)
 {
     /* Check and configure the button */
     if (!gpio_is_ready_dt(&button)) {
@@ -41,7 +48,10 @@ void main(void)
     if (gpio_is_ready_dt(&led_r)) gpio_pin_configure_dt(&led_r, GPIO_OUTPUT_INACTIVE);
     if (gpio_is_ready_dt(&led_g)) gpio_pin_configure_dt(&led_g, GPIO_OUTPUT_INACTIVE);
     if (gpio_is_ready_dt(&led_b)) gpio_pin_configure_dt(&led_b, GPIO_OUTPUT_INACTIVE);
+}
 
+void app_run(void)
+{
     while (1) {
         /* Wait for button press via semaphore instead of polling */
         if (k_sem_take(&button_sem, K_FOREVER) == 0) {
@@ -49,22 +59,20 @@ void main(void)
             color_state = (color_state + 1) % 4;
 
             /* Turn off all LEDs first */
-            gpio_pin_set_dt(&led_r, 0);
-            gpio_pin_set_dt(&led_g, 0);
-            gpio_pin_set_dt(&led_b, 0);
+            set_color(0, 0, 0);
 
             /* Switch colors based on state */
             switch (color_state) {
                 case 1:
-                    gpio_pin_set_dt(&led_r, 1);
+                    set_color(1, 0, 0);
                     printk("RGB LED -> RED\n");
                     break;
                 case 2:
-                    gpio_pin_set_dt(&led_g, 1);
+                    set_color(0, 1, 0);
                     printk("RGB LED -> GREEN\n");
                     break;
                 case 3:
-                    gpio_pin_set_dt(&led_b, 1);
+                    set_color(0, 0, 1);
                     printk("RGB LED -> BLUE\n");
                     break;
                 default:
@@ -73,4 +81,10 @@ void main(void)
             }
         }
     }
+}
+
+void main(void)
+{
+    system_init();
+    app_run();
 }
