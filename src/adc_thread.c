@@ -2,7 +2,7 @@
 #include <zephyr/drivers/adc.h>
 #include <zephyr/sys/printk.h>
 
-#define ADC_NODE DT_PATH(adc_sensor)
+#define ADC_NODE DT_ALIAS(adc_sensor)
 static const struct adc_dt_spec adc_channel = ADC_DT_SPEC_GET(ADC_NODE);
 
 void adc_thread_entry(void *p1, void *p2, void *p3)
@@ -20,11 +20,29 @@ void adc_thread_entry(void *p1, void *p2, void *p3)
         .buffer_size = sizeof(sample_buffer),
     };
 
+    int err = 0;
+
     while (1) {
         adc_sequence_init_dt(&adc_channel, &sequence);
+        err = adc_read_dt(&adc_channel, &sequence);
         
-        if (adc_read_dt(&adc_channel, &sequence) == 0) {
-            printk("LDR ADC raw: %d\n", sample_buffer);
+        if (err == 0) {
+            int32_t raw = sample_buffer;
+            
+            /* Calculate the maximum value for the ADC resolution */
+            int32_t max_raw = ((int32_t)1 << adc_channel.resolution) - 1;
+            
+            /* Convert the raw measurement into an inverted percentage */
+            int percent = 100 - (raw * 100 / max_raw);
+            
+            /* Keep the percentage within the 0–100 range */
+            if (percent < 0) percent = 0;
+            if (percent > 100) percent = 100;
+
+            printk("LDR ADC raw: %d | Brightness: %d%%\n", (int)raw, percent);
+        }
+        else {
+            printk("ADC read failed: %d\n", err);
         }
         
         k_msleep(2000); 
