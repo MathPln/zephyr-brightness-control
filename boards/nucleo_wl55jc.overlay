@@ -1,22 +1,27 @@
+ #include <zephyr/dt-bindings/adc/adc.h>
+
 / {
     aliases {
         sw-b2 = &button_2;
         led-r = &rgb_red;
         led-g = &rgb_green;
         led-b = &rgb_blue;
-        adc-sensor = &adc_sensor;
+        
     };
 
     leds {
         compatible = "gpio-leds";
+
         rgb_red: rgb_red {
             gpios = <&gpioa 5 GPIO_ACTIVE_LOW>;
             label = "RGB LED Red";
         };
+
         rgb_green: rgb_green {
             gpios = <&gpioa 6 GPIO_ACTIVE_LOW>;
             label = "RGB LED Green";
         };
+
         rgb_blue: rgb_blue {
             gpios = <&gpioa 7 GPIO_ACTIVE_LOW>;
             label = "RGB LED Blue";
@@ -25,22 +30,21 @@
 
     gpio_keys {
         compatible = "gpio-keys";
+
         button_2: button_2 {
             label = "User Button B2";
             gpios = <&gpioa 1 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
         };
     };
 
-    adc_sensor: adc_sensor {
-        compatible = "voltage-divider";
-        io-channels = <&adc1 5>;
-        output-ohms = <0>;
-        full-ohms = <1>;
+    zephyr,user {
+    io-channels = <&adc1 5>;
     };
 };
 
 &adc1 {
     status = "okay";
+
     #address-cells = <1>;
     #size-cells = <0>;
 
