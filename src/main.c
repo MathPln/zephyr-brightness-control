@@ -4,8 +4,9 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/sys/printk.h>
 
-/* Message queue defined in adc_thread.c */
+/* Message queue and thread ID defined in adc_thread.c */
 extern struct k_msgq adc_msgq;
+extern const k_tid_t adc_thread_id;
 
 /* Retrieve button B2 from the DeviceTree overlay. */
 #define SW_B2_NODE DT_ALIAS(sw_b2)
@@ -107,10 +108,13 @@ static void app_run(void)
         if (k_sem_take(&button_sem, K_NO_WAIT) == 0) {
             if (current_mode == MODE_NORMAL) {
                 current_mode = MODE_BLUE;
+                k_thread_suspend(adc_thread_id);
                 set_color(0, 0, 1); // Fix LED to BLUE
                 printk("\n--- SWITCH TO MODE BLUE ---\n");
             } else {
                 current_mode = MODE_NORMAL;
+                k_msgq_purge(&adc_msgq);
+                k_thread_resume(adc_thread_id);
                 printk("\n--- SWITCH TO MODE NORMAL ---\n");
             }
         }
