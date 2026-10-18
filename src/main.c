@@ -3,36 +3,42 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/sys/printk.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 /* Message queue and thread ID defined in adc_thread.c */
 extern struct k_msgq adc_msgq;
 extern const k_tid_t adc_thread_id;
 
-/* Retrieve button B2 from the DeviceTree overlay. */
+/* Button B2 */
 #define SW_B2_NODE DT_ALIAS(sw_b2)
 static const struct gpio_dt_spec button =
     GPIO_DT_SPEC_GET(SW_B2_NODE, gpios);
 
-/* Retrieve RGB LEDs from the DeviceTree overlay. */
+/* RGB LEDs */
 static const struct gpio_dt_spec led_r =
     GPIO_DT_SPEC_GET(DT_ALIAS(led_r), gpios);
-
 static const struct gpio_dt_spec led_g =
     GPIO_DT_SPEC_GET(DT_ALIAS(led_g), gpios);
-
 static const struct gpio_dt_spec led_b =
     GPIO_DT_SPEC_GET(DT_ALIAS(led_b), gpios);
 
-/* Button callback data and semaphore. */
-/* FSM States */
-typedef enum { MODE_NORMAL, MODE_BLUE } app_mode_t;
-static volatile app_mode_t current_mode = MODE_NORMAL;
+/* Finite State Machine */
+typedef enum {
+    MODE_NORMAL,
+    MODE_BLUE,
+    MODE_OFF
+} app_mode_t;
 
-/* Button callback data and semaphore */
+static app_mode_t current_mode = MODE_NORMAL;
+static bool adc_suspended;
+
+/* Button interrupt and semaphore */
 static struct gpio_callback button_cb_data;
 K_SEM_DEFINE(button_sem, 0, 1);
 
-/* Set the RGB LED color using logical GPIO states. */
+/* Set RGB color using logical GPIO states */
 static void set_color(int red, int green, int blue)
 {
     gpio_pin_set_dt(&led_r, red);
@@ -40,7 +46,28 @@ static void set_color(int red, int green, int blue)
     gpio_pin_set_dt(&led_b, blue);
 }
 
-/* Interrupt Service Routine for button B2. */
+/* Suspend ADC only when it is currently running */
+static void suspend_adc(void)
+{
+    if (!adc_suspended) {
+        k_thread_suspend(adc_thread_id);
+        adc_suspended = true;
+    }
+
+    k_msgq_purge(&adc_msgq);
+}
+
+/* Resume ADC only when it is currently suspended */
+static void resume_adc(void)
+{
+    if (adc_suspended) {
+        k_msgq_purge(&adc_msgq);
+        k_thread_resume(adc_thread_id);
+        adc_suspended = false;
+    }
+}
+
+/* GPIO interrupt: notify the main thread */
 static void button_isr(const struct device *dev,
                        struct gpio_callback *cb,
                        uint32_t pins)
@@ -48,15 +75,44 @@ static void button_isr(const struct device *dev,
     k_sem_give(&button_sem);
 }
 
+/* Handle a short press */
+static void handle_short_press(void)
+{
+    if (current_mode == MODE_NORMAL) {
+        current_mode = MODE_BLUE;
+        suspend_adc();
+        set_color(0, 0, 1);
+        printk("\n--- MODE BLUE ---\n");
+    } else if (current_mode == MODE_BLUE) {
+        current_mode = MODE_NORMAL;
+        resume_adc();
+        printk("\n--- MODE NORMAL ---\n");
+    } else {
+        /* A short press in OFF restores NORMAL */
+        current_mode = MODE_NORMAL;
+        resume_adc();
+        printk("\n--- MODE NORMAL ---\n");
+    }
+}
+
+/* Handle a long press: enter OFF immediately */
+static void handle_long_press(void)
+{
+    if (current_mode != MODE_OFF) {
+        current_mode = MODE_OFF;
+        suspend_adc();
+        set_color(0, 0, 0);
+        printk("\nSystem OFF\n");
+    }
+}
+
 static int system_init(void)
 {
-    /* Check whether the button is ready. */
     if (!gpio_is_ready_dt(&button)) {
         printk("Error: button device is not ready\n");
         return -ENODEV;
     }
 
-    /* Configure button input and interrupt. */
     int err = gpio_pin_configure_dt(&button, GPIO_INPUT);
     if (err < 0) {
         printk("Button configuration failed: %d\n", err);
@@ -71,13 +127,13 @@ static int system_init(void)
         return err;
     }
 
-    err = gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_TO_ACTIVE);
+    err = gpio_pin_interrupt_configure_dt(
+        &button, GPIO_INT_EDGE_TO_ACTIVE);
     if (err < 0) {
         printk("Button interrupt configuration failed: %d\n", err);
         return err;
     }
 
-    /* Check and configure the RGB LEDs. */
     if (!gpio_is_ready_dt(&led_r) ||
         !gpio_is_ready_dt(&led_g) ||
         !gpio_is_ready_dt(&led_b)) {
@@ -99,30 +155,46 @@ static int system_init(void)
 
 static void app_run(void)
 {
-    printk("=== System started in NORMAL mode ===\n");
-    set_color(0, 0, 0);
+    bool press_in_progress = false;
+    bool long_press_handled = false;
+    int64_t press_start_ms = 0;
     int percent;
 
+    printk("System started: NORMAL\n");
+    set_color(0, 0, 0);
+
     while (1) {
-        /* Check button presses to toggle FSM state */
+        /* Detect a new button press */
         if (k_sem_take(&button_sem, K_NO_WAIT) == 0) {
-            if (current_mode == MODE_NORMAL) {
-                current_mode = MODE_BLUE;
-                k_thread_suspend(adc_thread_id);
-                set_color(0, 0, 1); // Fix LED to BLUE
-                printk("\n--- SWITCH TO MODE BLUE ---\n");
-            } else {
-                current_mode = MODE_NORMAL;
-                k_msgq_purge(&adc_msgq);
-                k_thread_resume(adc_thread_id);
-                printk("\n--- SWITCH TO MODE NORMAL ---\n");
+            if (!press_in_progress) {
+                press_in_progress = true;
+                long_press_handled = false;
+                press_start_ms = k_uptime_get();
             }
         }
 
-        /* Wait for ADC value (100ms timeout) */
-        if (k_msgq_get(&adc_msgq, &percent, K_MSEC(100)) == 0) {
-            
-            /* Update LED color based on brightness ONLY in NORMAL mode */
+        if (press_in_progress) {
+            int button_active = gpio_pin_get_dt(&button);
+
+            if (button_active > 0) {
+                /* Trigger OFF as soon as the 1-second threshold is reached */
+                if (!long_press_handled &&
+                    (k_uptime_get() - press_start_ms >= 1000)) {
+                    handle_long_press();
+                    long_press_handled = true;
+                }
+            } else if (button_active == 0) {
+                /* Release: only short presses trigger a short-press action */
+                if (!long_press_handled) {
+                    handle_short_press();
+                }
+
+                press_in_progress = false;
+            }
+        }
+
+        /* Receive ADC values; short timeout keeps button detection responsive */
+        if (k_msgq_get(&adc_msgq, &percent, K_MSEC(20)) == 0) {
             if (current_mode == MODE_NORMAL) {
                 if (percent < 33) {
                     set_color(1, 0, 0);       /* Red */
@@ -147,3 +219,4 @@ int main(void)
     app_run();
     return 0;
 }
+
