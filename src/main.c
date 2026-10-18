@@ -1,90 +1,130 @@
+
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/sys/printk.h>
 
-/* Retrieve button B2 */
+/* Message queue defined in adc_thread.c */
+extern struct k_msgq adc_msgq;
+
+/* Retrieve button B2 from the DeviceTree overlay. */
 #define SW_B2_NODE DT_ALIAS(sw_b2)
-static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET_OR(SW_B2_NODE, gpios, {0});
+static const struct gpio_dt_spec button =
+    GPIO_DT_SPEC_GET(SW_B2_NODE, gpios);
 
-/* Retrieve RGB LEDs via aliases */
-static const struct gpio_dt_spec led_r = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led_r), gpios, {0});
-static const struct gpio_dt_spec led_g = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led_g), gpios, {0});
-static const struct gpio_dt_spec led_b = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led_b), gpios, {0});
+/* Retrieve RGB LEDs from the DeviceTree overlay. */
+static const struct gpio_dt_spec led_r =
+    GPIO_DT_SPEC_GET(DT_ALIAS(led_r), gpios);
 
-/* Button callback data and semaphore */
+static const struct gpio_dt_spec led_g =
+    GPIO_DT_SPEC_GET(DT_ALIAS(led_g), gpios);
+
+static const struct gpio_dt_spec led_b =
+    GPIO_DT_SPEC_GET(DT_ALIAS(led_b), gpios);
+
+/* Button callback data and semaphore. */
 static struct gpio_callback button_cb_data;
 K_SEM_DEFINE(button_sem, 0, 1);
-static int color_state = 0;
 
-/* Helper: Set RGB color */
-static void set_color(int r, int g, int b)
+/* Set the RGB LED color using logical GPIO states. */
+static void set_color(int red, int green, int blue)
 {
-    gpio_pin_set_dt(&led_r, r);
-    gpio_pin_set_dt(&led_g, g);
-    gpio_pin_set_dt(&led_b, b);
+    gpio_pin_set_dt(&led_r, red);
+    gpio_pin_set_dt(&led_g, green);
+    gpio_pin_set_dt(&led_b, blue);
 }
 
-/* Interrupt Service Routine for Button B2 */
-void button_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+/* Interrupt Service Routine for button B2. */
+static void button_isr(const struct device *dev,
+                       struct gpio_callback *cb,
+                       uint32_t pins)
 {
     k_sem_give(&button_sem);
 }
 
-void system_init(void)
+static int system_init(void)
 {
-    /* Check and configure the button */
+    /* Check whether the button is ready. */
     if (!gpio_is_ready_dt(&button)) {
         printk("Error: button device is not ready\n");
-        return;
+        return -ENODEV;
     }
-    gpio_pin_configure_dt(&button, GPIO_INPUT);
 
-    /* Configure button interrupt */
-    gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_TO_ACTIVE);
+    /* Configure button input and interrupt. */
+    int err = gpio_pin_configure_dt(&button, GPIO_INPUT);
+    if (err < 0) {
+        printk("Button configuration failed: %d\n", err);
+        return err;
+    }
+
     gpio_init_callback(&button_cb_data, button_isr, BIT(button.pin));
-    gpio_add_callback(button.port, &button_cb_data);
 
-    /* Check and configure the RGB LEDs */
-    if (gpio_is_ready_dt(&led_r)) gpio_pin_configure_dt(&led_r, GPIO_OUTPUT_INACTIVE);
-    if (gpio_is_ready_dt(&led_g)) gpio_pin_configure_dt(&led_g, GPIO_OUTPUT_INACTIVE);
-    if (gpio_is_ready_dt(&led_b)) gpio_pin_configure_dt(&led_b, GPIO_OUTPUT_INACTIVE);
+    err = gpio_add_callback(button.port, &button_cb_data);
+    if (err < 0) {
+        printk("Button callback registration failed: %d\n", err);
+        return err;
+    }
+
+    err = gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_TO_ACTIVE);
+    if (err < 0) {
+        printk("Button interrupt configuration failed: %d\n", err);
+        return err;
+    }
+
+    /* Check and configure the RGB LEDs. */
+    if (!gpio_is_ready_dt(&led_r) ||
+        !gpio_is_ready_dt(&led_g) ||
+        !gpio_is_ready_dt(&led_b)) {
+        printk("Error: RGB GPIO device is not ready\n");
+        return -ENODEV;
+    }
+
+    err = gpio_pin_configure_dt(&led_r, GPIO_OUTPUT_INACTIVE);
+    if (err < 0) return err;
+
+    err = gpio_pin_configure_dt(&led_g, GPIO_OUTPUT_INACTIVE);
+    if (err < 0) return err;
+
+    err = gpio_pin_configure_dt(&led_b, GPIO_OUTPUT_INACTIVE);
+    if (err < 0) return err;
+
+    return 0;
 }
 
-void app_run(void)
+static void app_run(void)
 {
+    int percent;
+
+    set_color(0, 0, 0);
+    printk("Brightness control started\n");
+
     while (1) {
-        /* Wait for button press via semaphore instead of polling */
-        if (k_sem_take(&button_sem, K_FOREVER) == 0) {
-            
-            color_state = (color_state + 1) % 4;
-
-            /* Turn off all LEDs first */
-            set_color(0, 0, 0);
-
-            /* Switch colors based on state */
-            switch (color_state) {
-                case 1:
-                    set_color(1, 0, 0);
-                    printk("RGB LED -> RED\n");
-                    break;
-                case 2:
-                    set_color(0, 1, 0);
-                    printk("RGB LED -> GREEN\n");
-                    break;
-                case 3:
-                    set_color(0, 0, 1);
-                    printk("RGB LED -> BLUE\n");
-                    break;
-                default:
-                    printk("RGB LED -> OFF\n");
-                    break;
+        /* Process the latest brightness value, if available. */
+        if (k_msgq_get(&adc_msgq, &percent, K_MSEC(100)) == 0) {
+            if (percent < 33) {
+                set_color(1, 0, 0);       /* Red */
+            } else if (percent <= 66) {
+                set_color(1, 1, 0);       /* Yellow */
+            } else {
+                set_color(0, 1, 0);       /* Green */
             }
+        }
+
+        /* Handle button presses; mode switching comes next. */
+        if (k_sem_take(&button_sem, K_NO_WAIT) == 0) {
+            printk("Button B2 pressed\n");
         }
     }
 }
 
-void main(void)
+int main(void)
 {
-    system_init();
+    int err = system_init();
+
+    if (err < 0) {
+        return err;
+    }
+
     app_run();
+    return 0;
 }
