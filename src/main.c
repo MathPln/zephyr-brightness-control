@@ -23,6 +23,11 @@ static const struct gpio_dt_spec led_b =
     GPIO_DT_SPEC_GET(DT_ALIAS(led_b), gpios);
 
 /* Button callback data and semaphore. */
+/* FSM States */
+typedef enum { MODE_NORMAL, MODE_BLUE } app_mode_t;
+static volatile app_mode_t current_mode = MODE_NORMAL;
+
+/* Button callback data and semaphore */
 static struct gpio_callback button_cb_data;
 K_SEM_DEFINE(button_sem, 0, 1);
 
@@ -93,26 +98,36 @@ static int system_init(void)
 
 static void app_run(void)
 {
+    printk("=== System started in NORMAL mode ===\n");
+    set_color(0, 0, 0);
     int percent;
 
-    set_color(0, 0, 0);
-    printk("Brightness control started\n");
-
     while (1) {
-        /* Process the latest brightness value, if available. */
-        if (k_msgq_get(&adc_msgq, &percent, K_MSEC(100)) == 0) {
-            if (percent < 33) {
-                set_color(1, 0, 0);       /* Red */
-            } else if (percent <= 66) {
-                set_color(1, 1, 0);       /* Yellow */
+        /* Check button presses to toggle FSM state */
+        if (k_sem_take(&button_sem, K_NO_WAIT) == 0) {
+            if (current_mode == MODE_NORMAL) {
+                current_mode = MODE_BLUE;
+                set_color(0, 0, 1); // Fix LED to BLUE
+                printk("\n--- SWITCH TO MODE BLUE ---\n");
             } else {
-                set_color(0, 1, 0);       /* Green */
+                current_mode = MODE_NORMAL;
+                printk("\n--- SWITCH TO MODE NORMAL ---\n");
             }
         }
 
-        /* Handle button presses; mode switching comes next. */
-        if (k_sem_take(&button_sem, K_NO_WAIT) == 0) {
-            printk("Button B2 pressed\n");
+        /* Wait for ADC value (100ms timeout) */
+        if (k_msgq_get(&adc_msgq, &percent, K_MSEC(100)) == 0) {
+            
+            /* Update LED color based on brightness ONLY in NORMAL mode */
+            if (current_mode == MODE_NORMAL) {
+                if (percent < 33) {
+                    set_color(1, 0, 0);       /* Red */
+                } else if (percent <= 66) {
+                    set_color(1, 1, 0);       /* Yellow */
+                } else {
+                    set_color(0, 1, 0);       /* Green */
+                }
+            }
         }
     }
 }
